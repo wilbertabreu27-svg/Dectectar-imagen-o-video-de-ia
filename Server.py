@@ -3,29 +3,54 @@ import io
 import cv2
 import base64
 import hashlib
+import gc
 import numpy as np
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from PIL import Image, ImageChops, ImageEnhance
-from transformers import pipeline
+
+# ---------------------------------------------------------------------
+# OPTIMIZACIÓN DE MEMORIA RAM Y FUERZA CPU PARA RENDER (LÍMITE 512MB)
+# ---------------------------------------------------------------------
+import torch
+
+# 1. Forzar el uso exclusivo de CPU
+device = torch.device("cpu")
+
+# 2. Desactivar el cálculo de gradientes a nivel global (Ahorra ~50% de RAM)
+torch.set_grad_enabled(False)
 
 app = Flask(__name__)
 CORS(app)
 
-print("Iniciando Motor Forense Anti-Engaño (Protección Estricta Multi-IA)...")
+print("Iniciando Motor Forense Anti-Engaño (Optimizado para 512MB RAM y CPU)...")
 
-# Carga de la Red Neuronal para clasificación sintética
-try:
-    detector_sintetico = pipeline("image-classification", model="umm-maybe/AI-image-detector")
-    print("-> Red Neuronal Forense activa con éxito.")
-except Exception as e:
-    print(f"Advertencia al cargar modelo de IA: {e}")
-    detector_sintetico = None
+# Carga diferida (Lazy Loading) para no agotar la RAM al arrancar el servidor
+detector_sintetico = None
+
+def obtener_detector():
+    global detector_sintetico
+    if detector_sintetico is None:
+        try:
+            from transformers import pipeline
+            print("Cargando modelo de clasificación liviano en CPU...")
+            detector_sintetico = pipeline(
+                "image-classification",
+                model="umm-maybe/AI-image-detector",
+                device=-1  # -1 fuerza el uso estricto de CPU en Transformers
+            )
+            print("-> Red Neuronal Forense activa con éxito en CPU.")
+        except Exception as e:
+            print(f"Advertencia al cargar modelo de IA: {e}")
+            detector_sintetico = False
+    return detector_sintetico if detector_sintetico is not False else None
+
 
 def generar_hash_md5(imagen_pil):
     buffer = io.BytesIO()
     imagen_pil.save(buffer, format='JPEG')
     return hashlib.md5(buffer.getvalue()).hexdigest()
+
 
 def analizar_metadatos_y_camara(pil_img):
     exif = pil_img._getexif() if hasattr(pil_img, '_getexif') else None
@@ -38,6 +63,7 @@ def analizar_metadatos_y_camara(pil_img):
 
     return False, "Metadatos coherentes con un sensor de cámara física."
 
+
 def analizar_ruido_sensor_prnu(imagen_cv):
     gray = cv2.cvtColor(imagen_cv, cv2.COLOR_BGR2GRAY)
     blur = cv2.GaussianBlur(gray, (5, 5), 0)
@@ -46,9 +72,9 @@ def analizar_ruido_sensor_prnu(imagen_cv):
     desviacion_ruido = float(np.std(ruido))
     media_ruido = float(np.mean(ruido))
 
-    # Evalúa si el grano es sintético (muy uniforme) o de sensor real
     es_grano_sintetico = (media_ruido > 0) and (desviacion_ruido / media_ruido < 1.15)
     return round(desviacion_ruido, 2), es_grano_sintetico
+
 
 def analizar_espectro_fft(imagen_cv):
     gray = cv2.cvtColor(imagen_cv, cv2.COLOR_BGR2GRAY)
@@ -65,6 +91,7 @@ def analizar_espectro_fft(imagen_cv):
     promedio = float(np.mean(magnitude_spectrum))
     return round(pico / (promedio + 1e-5), 2)
 
+
 def detectar_recortes_y_montajes(imagen_cv):
     gray = cv2.cvtColor(imagen_cv, cv2.COLOR_BGR2GRAY)
     sobelx = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
@@ -75,11 +102,13 @@ def detectar_recortes_y_montajes(imagen_cv):
     desviacion = float(np.std(magnitud))
     return round(desviacion / (promedio + 1e-5), 2)
 
+
 def detectar_filtros_histograma(imagen_cv):
     hsv = cv2.cvtColor(imagen_cv, cv2.COLOR_BGR2HSV)
     hist_sat = cv2.calcHist([hsv], [1], None, [256], [0, 256])
     valles_vacios = np.sum(hist_sat == 0)
     return round((valles_vacios / 256.0) * 100, 2)
+
 
 def generar_mapa_ela(imagen_pil, calidad=90):
     buffer = io.BytesIO()
@@ -103,13 +132,13 @@ def generar_mapa_ela(imagen_pil, calidad=90):
 
     return ela_base64, round(promedio_diferencia, 2)
 
+
 @app.route('/analizar_master', methods=['POST'])
 def analizar_master():
     if 'file' not in request.files:
         return jsonify({'error': 'No se subió ningún archivo.'}), 400
 
     file = request.files['file']
-    nombre = file.filename or ""
 
     try:
         img_bytes = file.read()
@@ -117,10 +146,14 @@ def analizar_master():
         img_cv = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
         pil_img = Image.open(io.BytesIO(img_bytes)).convert('RGB')
 
-        # 1. Red Neuronal
+        # Escalar la imagen a un máximo razonable para optimizar memoria durante las transformaciones
+        pil_img.thumbnail((1024, 1024))
+
+        # 1. Red Neuronal (Carga solo bajo demanda en CPU)
         prob_ia = 0.0
-        if detector_sintetico:
-            res = detector_sintetico(pil_img)
+        detector = obtener_detector()
+        if detector:
+            res = detector(pil_img)
             for item in res:
                 if any(k in item['label'].lower() for k in ['fake', 'ai', 'synthetic', 'artificial']):
                     prob_ia = round(item['score'] * 100, 2)
@@ -135,10 +168,6 @@ def analizar_master():
         ela_b64, dif_ela = generar_mapa_ela(pil_img)
 
         # REGLA ANTI-ENGAÑO ULTRA-ESTRICTA:
-        # Se clasifica como IA si:
-        # - La red marca sospecha (> 10%)
-        # - O carece de metadatos de cámara Y (tiene grano sintético, ruido bajo o FFT alto)
-        # - O carece totalmente de metadatos de hardware físico
         es_sintetica_ia = (
             (prob_ia > 10.0) or
             (sin_exif_camara and es_grano_sintetico) or
@@ -176,6 +205,9 @@ def analizar_master():
             diagnostico = "FOTO REAL TOMADA CON CÁMARA FÍSICA"
             riesgo = "Bajo"
 
+        # Liberar residuos de memoria
+        gc.collect()
+
         return jsonify({
             'tipo': 'Imagen',
             'diagnostico': diagnostico,
@@ -188,8 +220,10 @@ def analizar_master():
         })
 
     except Exception as e:
+        gc.collect()
         return jsonify({'error': f"Error en la inspección forense: {str(e)}"}), 500
 
+
 if __name__ == '__main__':
-    print("Servidor Anti-Engaño listo en http://127.0.0.1:5000")
-    app.run(host='127.0.0.1', port=5000, debug=True)
+    port = int(os.environ.get('PORT', 10000))
+    app.run(host='0.0.0.0', port=port)
