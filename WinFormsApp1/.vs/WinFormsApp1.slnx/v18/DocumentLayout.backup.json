@@ -1,0 +1,37 @@
+{
+  "Version": 1,
+  "WorkspaceRootPath": "C:\\Users\\jmkgamer\\source\\repos\\WinFormsApp1\\",
+  "Documents": [
+    {
+      "AbsoluteMoniker": "D:0:0:{BCD871CD-CAC1-4A5F-AC8B-61D0ED325647}|WinFormsApp1.csproj|c:\\users\\jmkgamer\\source\\repos\\winformsapp1\\mauiloginapp\\mauiprogram.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
+      "RelativeMoniker": "D:0:0:{BCD871CD-CAC1-4A5F-AC8B-61D0ED325647}|WinFormsApp1.csproj|solutionrelative:mauiloginapp\\mauiprogram.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
+    }
+  ],
+  "DocumentGroupContainers": [
+    {
+      "Orientation": 0,
+      "VerticalTabListWidth": 256,
+      "DocumentGroups": [
+        {
+          "DockedWidth": 200,
+          "SelectedChildIndex": 0,
+          "Children": [
+            {
+              "$type": "Document",
+              "DocumentIndex": 0,
+              "Title": "MauiProgram.cs",
+              "DocumentMoniker": "C:\\Users\\jmkgamer\\source\\repos\\WinFormsApp1\\MauiLoginApp\\MauiProgram.cs",
+              "RelativeDocumentMoniker": "MauiLoginApp\\MauiProgram.cs",
+              "ToolTip": "C:\\Users\\jmkgamer\\source\\repos\\WinFormsApp1\\MauiLoginApp\\MauiProgram.cs",
+              "RelativeToolTip": "MauiLoginApp\\MauiProgram.cs",
+              "ViewState": "AgIAAAAAAAAAAAAAAAAAABYAAAAAAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
+              "WhenOpened": "2026-08-31T00:19:29.675Z",
+              "EditorCaption": ""
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="MauiLoginApp\MauiLoginApp.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="MauiLoginApp\App.xaml">
+      <Generator>MSBuild:Compile</Generator>
+    </None>
+    <None Update="MauiLoginApp\MainPage.xaml">
+      <Generator>MSBuild:Compile</Generator>
+    </None>
+  </ItemGroup>
+
+</Project>

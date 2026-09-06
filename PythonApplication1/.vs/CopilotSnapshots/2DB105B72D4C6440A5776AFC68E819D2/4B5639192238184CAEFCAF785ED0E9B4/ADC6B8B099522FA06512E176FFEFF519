@@ -1,0 +1,83 @@
+﻿
+import pygame
+import random
+import sys
+
+pygame.init()
+
+# Ventana
+ANCHO = 800
+ALTO = 600
+
+pantalla = pygame.display.set_mode((ANCHO, ALTO))
+pygame.display.set_caption("Stickman Runner")
+
+reloj = pygame.time.Clock()
+
+# Colores
+BLANCO = (255, 255, 255)
+NEGRO = (0, 0, 0)
+ROJO = (255, 0, 0)
+GRIS = (100, 100, 100)
+
+# Carriles
+carriles = [250, 400, 550]
+carril_actual = 1
+
+# Jugador
+jugador_y = 500
+salto = False
+velocidad_salto = 0
+
+# Obstáculos
+obstaculos = []
+
+# Puntuación
+puntos = 0
+
+
+def dibujar_stickman(x, y):
+    pygame.draw.circle(pantalla, NEGRO, (x, y - 40), 15, 2)
+    pygame.draw.line(pantalla, NEGRO, (x, y - 25), (x, y + 20), 3)
+    pygame.draw.line(pantalla, NEGRO, (x - 15, y), (x + 15, y), 3)
+    pygame.draw.line(pantalla, NEGRO, (x, y + 20), (x - 15, y + 45), 3)
+    pygame.draw.line(pantalla, NEGRO, (x, y + 20), (x + 15, y + 45), 3)
+
+
+def crear_obstaculo():
+    carril = random.choice(carriles)
+    obstaculos.append([carril, -50])
+
+
+while True:
+    for evento in pygame.event.get():
+        if evento.type == pygame.QUIT:
+            pygame.quit()
+            sys.exit()
+
+        if evento.type == pygame.KEYDOWN:
+            if evento.key == pygame.K_LEFT and carril_actual > 0:
+                carril_actual -= 1
+
+            if evento.key == pygame.K_RIGHT and carril_actual < 2:
+                carril_actual += 1
+
+            if evento.key == pygame.K_UP and not salto:
+                salto = True
+                velocidad_salto = -18
+
+    # Salto
+    if salto:
+        jugador_y += velocidad_salto
+        velocidad_salto += 1
+
+        if jugador_y >= 500:
+            jugador_y = 500
+            salto = False
+
+    # Crear obstáculos
+    if random.randint(1, 40) == 1:
+        crear_obstaculo()
+
+    # Mover obstáculos
+    for obstaculo in 

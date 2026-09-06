@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Application xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             x:Class="MauiLoginApp.App">
+    <Application.Resources>
+        <ResourceDictionary>
+            <Style TargetType="ContentPage">
+                <Setter Property="BackgroundColor" Value="#228B22" />
+            </Style>
+        </ResourceDictionary>
+    </Application.Resources>
+</Application>
