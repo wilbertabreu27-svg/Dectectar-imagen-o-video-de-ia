@@ -10,6 +10,7 @@ from flask_cors import CORS
 from flask_talisman import Talisman
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
+from PIL import Image, ImageChops, ImageEnhance
 
 # ---------------------------------------------------------------------
 # OPTIMIZACIÓN DE MEMORIA RAM Y FUERZA CPU PARA RENDER (LÍMITE 512MB)
@@ -28,11 +29,8 @@ CORS(app)
 # ---------------------------------------------------------------------
 # CAPAS DE SEGURIDAD COMPATIBLES CON RENDER (SIN AFECTAR RENDIMIENTO)
 # ---------------------------------------------------------------------
-# Talisman: Añade cabeceras HTTP de seguridad contra XSS y ataques de navegador.
-# Nota: 'content_security_policy=None' evita bloqueos con scripts o estilos en línea.
 Talisman(app, content_security_policy=None, strict_transport_security=True)
 
-# Limiter: Evita que bots o atacantes saturen tu servidor ejecutando el análisis masivamente.
 limiter = Limiter(
     app=app,
     key_func=get_remote_address,
@@ -159,7 +157,7 @@ def home():
 
 
 @app.route('/analizar_master', methods=['POST'])
-@limiter.limit("20 per minute")  # Límite seguro para evitar abuso de análisis pesado en CPU gratuita
+@limiter.limit("20 per minute")
 def analizar_master():
     if 'file' not in request.files:
         return jsonify({'error': 'No se subió ningún archivo.'}), 400
