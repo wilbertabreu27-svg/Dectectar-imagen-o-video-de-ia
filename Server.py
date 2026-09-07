@@ -7,7 +7,9 @@ import gc
 import numpy as np
 from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
-from PIL import Image, ImageChops, ImageEnhance
+from flask_talisman import Talisman
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 
 # ---------------------------------------------------------------------
 # OPTIMIZACIÓN DE MEMORIA RAM Y FUERZA CPU PARA RENDER (LÍMITE 512MB)
@@ -23,7 +25,22 @@ torch.set_grad_enabled(False)
 app = Flask(__name__)
 CORS(app)
 
-print("Iniciando Motor Forense Anti-Engaño (Optimizado para 512MB RAM y CPU)...")
+# ---------------------------------------------------------------------
+# CAPAS DE SEGURIDAD COMPATIBLES CON RENDER (SIN AFECTAR RENDIMIENTO)
+# ---------------------------------------------------------------------
+# Talisman: Añade cabeceras HTTP de seguridad contra XSS y ataques de navegador.
+# Nota: 'content_security_policy=None' evita bloqueos con scripts o estilos en línea.
+Talisman(app, content_security_policy=None, strict_transport_security=True)
+
+# Limiter: Evita que bots o atacantes saturen tu servidor ejecutando el análisis masivamente.
+limiter = Limiter(
+    app=app,
+    key_func=get_remote_address,
+    default_limits=["300 per day", "60 per hour"],
+    storage_uri="memory://"
+)
+
+print("Iniciando Motor Forense Anti-Engaño (Optimizado para 512MB RAM y CPU con Escudo de Seguridad)...")
 
 # Carga diferida (Lazy Loading) para no agotar la RAM al arrancar el servidor
 detector_sintetico = None
@@ -142,6 +159,7 @@ def home():
 
 
 @app.route('/analizar_master', methods=['POST'])
+@limiter.limit("20 per minute")  # Límite seguro para evitar abuso de análisis pesado en CPU gratuita
 def analizar_master():
     if 'file' not in request.files:
         return jsonify({'error': 'No se subió ningún archivo.'}), 400
