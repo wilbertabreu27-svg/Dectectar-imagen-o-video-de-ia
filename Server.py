@@ -5,7 +5,7 @@ import base64
 import hashlib
 import gc
 import numpy as np
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
 from PIL import Image, ImageChops, ImageEnhance
 
@@ -35,7 +35,7 @@ def obtener_detector():
             from transformers import pipeline
             print("Cargando modelo de clasificación liviano en CPU...")
             detector_sintetico = pipeline(
-                "image-classification",
+                "image-classification", 
                 model="umm-maybe/AI-image-detector",
                 device=-1  # -1 fuerza el uso estricto de CPU en Transformers
             )
@@ -133,6 +133,14 @@ def generar_mapa_ela(imagen_pil, calidad=90):
     return ela_base64, round(promedio_diferencia, 2)
 
 
+# ==========================================
+# RUTA PRINCIPAL: Renderiza tu página web HTML
+# ==========================================
+@app.route('/')
+def home():
+    return render_template('index.html')
+
+
 @app.route('/analizar_master', methods=['POST'])
 def analizar_master():
     if 'file' not in request.files:
@@ -146,7 +154,7 @@ def analizar_master():
         img_cv = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
         pil_img = Image.open(io.BytesIO(img_bytes)).convert('RGB')
 
-        # Escalar la imagen a un máximo razonable para optimizar memoria durante las transformaciones
+        # Escalar la imagen a un máximo razonable para optimizar memoria
         pil_img.thumbnail((1024, 1024))
 
         # 1. Red Neuronal (Carga solo bajo demanda en CPU)
