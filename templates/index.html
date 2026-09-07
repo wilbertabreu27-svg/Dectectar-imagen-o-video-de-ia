@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Analizador Forense Multimodal Master</title>
+    <title>Analizador Multimodal Master</title>
     <style>
         * { box-sizing: border-box; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
         body { background-color: #0f172a; color: #f8fafc; padding: 30px; margin: 0; display: flex; justify-content: center; }
@@ -29,7 +29,7 @@
 <body>
 
 <div class="card">
-    <h1>Sistema Forense de Autenticidad Master</h1>
+    <h1>Sistema de Autenticidad Master</h1>
     <p class="subtitle">Investigación Web | Detección de IA | Análisis de Cámara | Recortes | Filtros | Video</p>
 
     <div class="upload-area">
@@ -84,7 +84,7 @@ async function procesarAnalisis() {
     statusBox.style.color = "#38bdf8";
 
     try {
-        const response = await fetch('http://127.0.0.1:5000/analizar_master', {
+        const response = await fetch('/analizar_master', {
             method: 'POST',
             body: formData
         });
