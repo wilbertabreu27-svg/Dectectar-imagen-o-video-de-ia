@@ -7,40 +7,17 @@ import gc
 import numpy as np
 from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
-from flask_talisman import Talisman
-from flask_limiter import Limiter
-from flask_limiter.util import get_remote_address
 from PIL import Image, ImageChops, ImageEnhance
-
-# ---------------------------------------------------------------------
-# OPTIMIZACIÓN DE MEMORIA RAM Y FUERZA CPU PARA RENDER (LÍMITE 512MB)
-# ---------------------------------------------------------------------
 import torch
 
-# 1. Forzar el uso exclusivo de CPU
 device = torch.device("cpu")
-
-# 2. Desactivar el cálculo de gradientes a nivel global (Ahorra ~50% de RAM)
 torch.set_grad_enabled(False)
 
 app = Flask(__name__)
 CORS(app)
 
-# ---------------------------------------------------------------------
-# CAPAS DE SEGURIDAD COMPATIBLES CON RENDER (SIN AFECTAR RENDIMIENTO)
-# ---------------------------------------------------------------------
-Talisman(app, content_security_policy=None, strict_transport_security=True)
+print("Iniciando Motor Forense Anti-Engaño (Original Estable)...")
 
-limiter = Limiter(
-    app=app,
-    key_func=get_remote_address,
-    default_limits=["300 per day", "60 per hour"],
-    storage_uri="memory://"
-)
-
-print("Iniciando Motor Forense Anti-Engaño (Optimizado para 512MB RAM y CPU con Escudo de Seguridad)...")
-
-# Carga diferida (Lazy Loading) para no agotar la RAM al arrancar el servidor
 detector_sintetico = None
 
 def obtener_detector():
@@ -52,7 +29,7 @@ def obtener_detector():
             detector_sintetico = pipeline(
                 "image-classification", 
                 model="umm-maybe/AI-image-detector",
-                device=-1  # -1 fuerza el uso estricto de CPU en Transformers
+                device=-1
             )
             print("-> Red Neuronal Forense activa con éxito en CPU.")
         except Exception as e:
@@ -71,11 +48,9 @@ def analizar_metadatos_y_camara(pil_img):
     exif = pil_img._getexif() if hasattr(pil_img, '_getexif') else None
     if not exif:
         return True, "Ausencia total de metadatos EXIF de hardware de cámara (Típico de IA, Gemini y descargas web)."
-
     tiene_camara = 271 in exif or 272 in exif
     if not tiene_camara:
         return True, "Estructura EXIF presente pero sin marca/modelo de sensor de cámara física."
-
     return False, "Metadatos coherentes con un sensor de cámara física."
 
 
@@ -83,10 +58,8 @@ def analizar_ruido_sensor_prnu(imagen_cv):
     gray = cv2.cvtColor(imagen_cv, cv2.COLOR_BGR2GRAY)
     blur = cv2.GaussianBlur(gray, (5, 5), 0)
     ruido = cv2.absdiff(gray, blur)
-
     desviacion_ruido = float(np.std(ruido))
     media_ruido = float(np.mean(ruido))
-
     es_grano_sintetico = (media_ruido > 0) and (desviacion_ruido / media_ruido < 1.15)
     return round(desviacion_ruido, 2), es_grano_sintetico
 
@@ -96,12 +69,10 @@ def analizar_espectro_fft(imagen_cv):
     f = np.fft.fft2(gray)
     fshift = np.fft.fftshift(f)
     magnitude_spectrum = 20 * np.log(np.abs(fshift) + 1e-8)
-
     h, w = gray.shape
     cy, cx = h // 2, w // 2
     r = 30
     magnitude_spectrum[cy-r:cy+r, cx-r:cx+r] = 0
-
     pico = float(np.max(magnitude_spectrum))
     promedio = float(np.mean(magnitude_spectrum))
     return round(pico / (promedio + 1e-5), 2)
@@ -112,7 +83,6 @@ def detectar_recortes_y_montajes(imagen_cv):
     sobelx = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
     sobely = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
     magnitud = cv2.magnitude(sobelx, sobely)
-
     promedio = float(np.mean(magnitud))
     desviacion = float(np.std(magnitud))
     return round(desviacion / (promedio + 1e-5), 2)
@@ -131,33 +101,25 @@ def generar_mapa_ela(imagen_pil, calidad=90):
     img_rgb.save(buffer, 'JPEG', quality=calidad)
     buffer.seek(0)
     img_recomprimida = Image.open(buffer)
-
     diferencia = ImageChops.difference(img_rgb, img_recomprimida)
     extrema = diferencia.getextrema()
     max_diff = max([ex[1] for ex in extrema]) or 1
     escala = 255.0 / max_diff
-
     diferencia_amplificada = ImageEnhance.Brightness(diferencia).enhance(escala)
     stat_diff = np.array(diferencia)
     promedio_diferencia = float(np.mean(stat_diff))
-
     output_buffer = io.BytesIO()
     diferencia_amplificada.save(output_buffer, format='JPEG')
     ela_base64 = base64.b64encode(output_buffer.getvalue()).decode('utf-8')
-
     return ela_base64, round(promedio_diferencia, 2)
 
 
-# ==========================================
-# RUTA PRINCIPAL: Renderiza tu página web HTML
-# ==========================================
 @app.route('/')
 def home():
     return render_template('index.html')
 
 
 @app.route('/analizar_master', methods=['POST'])
-@limiter.limit("20 per minute")
 def analizar_master():
     if 'file' not in request.files:
         return jsonify({'error': 'No se subió ningún archivo.'}), 400
@@ -169,11 +131,8 @@ def analizar_master():
         nparr = np.frombuffer(img_bytes, np.uint8)
         img_cv = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
         pil_img = Image.open(io.BytesIO(img_bytes)).convert('RGB')
-
-        # Escalar la imagen a un máximo razonable para optimizar memoria
         pil_img.thumbnail((1024, 1024))
 
-        # 1. Red Neuronal (Carga solo bajo demanda en CPU)
         prob_ia = 0.0
         detector = obtener_detector()
         if detector:
@@ -183,7 +142,6 @@ def analizar_master():
                     prob_ia = round(item['score'] * 100, 2)
                     break
 
-        # 2. Análisis Forense Avanzado
         sin_exif_camara, msj_exif = analizar_metadatos_y_camara(pil_img)
         nivel_ruido, es_grano_sintetico = analizar_ruido_sensor_prnu(img_cv)
         ratio_fft = analizar_espectro_fft(img_cv)
@@ -191,7 +149,6 @@ def analizar_master():
         nivel_filtro = detectar_filtros_histograma(img_cv)
         ela_b64, dif_ela = generar_mapa_ela(pil_img)
 
-        # REGLA ANTI-ENGAÑO ULTRA-ESTRICTA:
         es_sintetica_ia = (
             (prob_ia > 10.0) or
             (sin_exif_camara and es_grano_sintetico) or
@@ -229,7 +186,6 @@ def analizar_master():
             diagnostico = "FOTO REAL TOMADA CON CÁMARA FÍSICA"
             riesgo = "Bajo"
 
-        # Liberar residuos de memoria
         gc.collect()
 
         return jsonify({
