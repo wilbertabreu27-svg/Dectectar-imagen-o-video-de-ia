@@ -75,16 +75,69 @@ async function procesarAnalisis() {
         return;
     }
 
-    const formData = new FormData();
-    formData.append('file', fileInput.files[0]);
-
+    const archivoOriginal = fileInput.files[0];
     resDiv.style.display = 'block';
     statusBox.className = "status";
-    statusBox.innerText = "Investigando huella web, espectro de frecuencias, recortes y firmas sintéticas...";
+    statusBox.innerText = "Optimizando imagen y preparando análisis forense...";
     statusBox.style.background = "#1e293b";
     statusBox.style.color = "#38bdf8";
 
+    // Función para comprimir y redimensionar la imagen en el cliente antes de enviarla
+    const comprimirYEnviar = (file) => {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const img = new Image();
+                img.onload = function() {
+                    const MAX_WIDTH = 1200;
+                    const MAX_HEIGHT = 1200;
+                    let width = img.width;
+                    let height = img.height;
+
+                    if (width > height) {
+                        if (width > MAX_WIDTH) {
+                            height *= MAX_WIDTH / width;
+                            width = MAX_WIDTH;
+                        }
+                    } else {
+                        if (height > MAX_HEIGHT) {
+                            width *= MAX_HEIGHT / height;
+                            height = MAX_HEIGHT;
+                        }
+                    }
+
+                    const canvas = document.createElement('canvas');
+                    canvas.width = width;
+                    canvas.height = height;
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(img, 0, 0, width, height);
+
+                    canvas.toBlob(function(blob) {
+                        resolve(blob);
+                    }, 'image/jpeg', 0.85);
+                }
+                img.onerror = reject;
+                img.src = e.target.result;
+            }
+            reader.onerror = reject;
+            reader.readAsDataURL(file);
+        });
+    };
+
     try {
+        let archivoAEnviar = archivoOriginal;
+        
+        // Si es una imagen, aplicamos la optimización para proteger la RAM de Render
+        if (archivoOriginal.type.startsWith('image/')) {
+            statusBox.innerText = "Optimizando resolución en navegador para proteger el servidor...";
+            archivoAEnviar = await comprimirYEnviar(archivoOriginal);
+        }
+
+        const formData = new FormData();
+        formData.append('file', archivoAEnviar, archivoOriginal.name);
+
+        statusBox.innerText = "Investigando huella web, espectro de frecuencias, recortes y firmas sintéticas...";
+
         const response = await fetch('/analizar_master', {
             method: 'POST',
             body: formData
@@ -129,7 +182,7 @@ async function procesarAnalisis() {
 
     } catch (err) {
         statusBox.className = "status falso";
-        statusBox.innerText = "Error de conexión con el servidor Python.";
+        statusBox.innerText = "Error de conexión con el servidor Python o fallo al procesar la imagen.";
     }
 }
 </script>
