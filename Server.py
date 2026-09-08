@@ -15,8 +15,7 @@ torch.set_grad_enabled(False)
 
 app = Flask(__name__)
 CORS(app)
-
-print("Iniciando Motor Forense Anti-Engaño (Original Estable)...")
+print("Iniciando Motor Forense Anti-Engaño (Resolución Libre)...")
 
 detector_sintetico = None
 
@@ -37,22 +36,19 @@ def obtener_detector():
             detector_sintetico = False
     return detector_sintetico if detector_sintetico is not False else None
 
-
 def generar_hash_md5(imagen_pil):
     buffer = io.BytesIO()
     imagen_pil.save(buffer, format='JPEG')
     return hashlib.md5(buffer.getvalue()).hexdigest()
 
-
 def analizar_metadatos_y_camara(pil_img):
     exif = pil_img._getexif() if hasattr(pil_img, '_getexif') else None
     if not exif:
-        return True, "Ausencia total de metadatos EXIF de hardware de cámara (Típico de IA, Gemini y descargas web)."
+        return True, "Ausencia total de metadatos EXIF de hardware de cámara (Típico de IA y descargas web)."
     tiene_camara = 271 in exif or 272 in exif
     if not tiene_camara:
         return True, "Estructura EXIF presente pero sin marca/modelo de sensor de cámara física."
     return False, "Metadatos coherentes con un sensor de cámara física."
-
 
 def analizar_ruido_sensor_prnu(imagen_cv):
     gray = cv2.cvtColor(imagen_cv, cv2.COLOR_BGR2GRAY)
@@ -62,7 +58,6 @@ def analizar_ruido_sensor_prnu(imagen_cv):
     media_ruido = float(np.mean(ruido))
     es_grano_sintetico = (media_ruido > 0) and (desviacion_ruido / media_ruido < 1.15)
     return round(desviacion_ruido, 2), es_grano_sintetico
-
 
 def analizar_espectro_fft(imagen_cv):
     gray = cv2.cvtColor(imagen_cv, cv2.COLOR_BGR2GRAY)
@@ -77,7 +72,6 @@ def analizar_espectro_fft(imagen_cv):
     promedio = float(np.mean(magnitude_spectrum))
     return round(pico / (promedio + 1e-5), 2)
 
-
 def detectar_recortes_y_montajes(imagen_cv):
     gray = cv2.cvtColor(imagen_cv, cv2.COLOR_BGR2GRAY)
     sobelx = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
@@ -87,13 +81,11 @@ def detectar_recortes_y_montajes(imagen_cv):
     desviacion = float(np.std(magnitud))
     return round(desviacion / (promedio + 1e-5), 2)
 
-
 def detectar_filtros_histograma(imagen_cv):
     hsv = cv2.cvtColor(imagen_cv, cv2.COLOR_BGR2HSV)
     hist_sat = cv2.calcHist([hsv], [1], None, [256], [0, 256])
     valles_vacios = np.sum(hist_sat == 0)
     return round((valles_vacios / 256.0) * 100, 2)
-
 
 def generar_mapa_ela(imagen_pil, calidad=90):
     buffer = io.BytesIO()
@@ -113,11 +105,9 @@ def generar_mapa_ela(imagen_pil, calidad=90):
     ela_base64 = base64.b64encode(output_buffer.getvalue()).decode('utf-8')
     return ela_base64, round(promedio_diferencia, 2)
 
-
 @app.route('/')
 def home():
     return render_template('index.html')
-
 
 @app.route('/analizar_master', methods=['POST'])
 def analizar_master():
@@ -131,8 +121,7 @@ def analizar_master():
         nparr = np.frombuffer(img_bytes, np.uint8)
         img_cv = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
         pil_img = Image.open(io.BytesIO(img_bytes)).convert('RGB')
-        pil_img.thumbnail((1024, 1024))
-
+        
         prob_ia = 0.0
         detector = obtener_detector()
         if detector:
@@ -164,7 +153,7 @@ def analizar_master():
         detalles.append(f"Análisis EXIF: {msj_exif}")
 
         if es_grano_sintetico:
-            detalles.append(f"Nivel de ruido PRNU: {nivel_ruido} pts (DETECTADO GRANO SINTÉTICO ARTIFICIAL).")
+            detalles.append(f"Nivel de ruido PRNU: {nivel_ruido} pts (DETECTADO GRANO SINTÉTICO).")
         else:
             detalles.append(f"Nivel de ruido PRNU: {nivel_ruido} pts.")
 
@@ -173,7 +162,7 @@ def analizar_master():
         if es_sintetica_ia:
             diagnostico = "IMAGEN GENERADA POR INTELIGENCIA ARTIFICIAL (Sintética Detectada)"
             riesgo = "Alto"
-            detalles.append("Bloqueo de seguridad: Confirmada la ausencia de sensor físico y presencia de artefactos latentes.")
+            detalles.append("Bloqueo de seguridad: Ausencia de sensor físico y presencia de artefactos latentes.")
         elif es_recorte:
             diagnostico = "IMAGEN MANIPULADA / RECORTE O MONTAJE DETECTADO"
             riesgo = "Medio"
@@ -186,6 +175,10 @@ def analizar_master():
             diagnostico = "FOTO REAL TOMADA CON CÁMARA FÍSICA"
             riesgo = "Bajo"
 
+        del img_bytes
+        del nparr
+        del img_cv
+        del pil_img
         gc.collect()
 
         return jsonify({
@@ -202,7 +195,6 @@ def analizar_master():
     except Exception as e:
         gc.collect()
         return jsonify({'error': f"Error en la inspección forense: {str(e)}"}), 500
-
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
