@@ -10,12 +10,14 @@ from flask_cors import CORS
 from PIL import Image, ImageChops, ImageEnhance
 import torch
 
-device = torch.device("cpu")
+# Optimizaciones extremas de RAM para entornos de bajos recursos (Render Free Tier)
+torch.set_num_threads(1)
 torch.set_grad_enabled(False)
+device = torch.device("cpu")
 
 app = Flask(__name__)
 CORS(app)
-print("Iniciando Motor Forense Anti-Engaño (Resolución Libre)...")
+print("Iniciando Motor Forense Optimizado (Modo Ahorro de RAM)...")
 
 detector_sintetico = None
 
@@ -24,13 +26,13 @@ def obtener_detector():
     if detector_sintetico is None:
         try:
             from transformers import pipeline
-            print("Cargando modelo de clasificación liviano en CPU...")
+            print("Cargando modelo de clasificación en CPU...")
             detector_sintetico = pipeline(
                 "image-classification", 
                 model="umm-maybe/AI-image-detector",
                 device=-1
             )
-            print("-> Red Neuronal Forense activa con éxito en CPU.")
+            print("-> Red Neuronal Forense activa.")
         except Exception as e:
             print(f"Advertencia al cargar modelo de IA: {e}")
             detector_sintetico = False
