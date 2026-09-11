@@ -7,24 +7,83 @@
     <title>Analizador Multimodal Master</title>
     <style>
         * { box-sizing: border-box; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
-        body { background-color: #0f172a; color: #f8fafc; padding: 30px; margin: 0; display: flex; justify-content: center; }
-        .card { background: #1e293b; padding: 30px; border-radius: 12px; width: 100%; max-width: 750px; border: 1px solid #334155; box-shadow: 0 10px 25px rgba(0,0,0,0.5); }
-        h1 { font-size: 22px; text-align: center; color: #38bdf8; margin-top: 0; }
-        .subtitle { text-align: center; color: #94a3b8; font-size: 13px; margin-bottom: 20px; }
-        .upload-area { margin: 20px 0; padding: 25px; border: 2px dashed #475569; border-radius: 8px; text-align: center; background: #0f172a; }
+        body { 
+            background-color: #0f172a; 
+            color: #f8fafc; 
+            padding: 15px; 
+            margin: 0; 
+            display: flex; 
+            justify-content: center; 
+            align-items: flex-start;
+            min-height: 100vh;
+        }
+        .card { 
+            background: #1e293b; 
+            padding: 20px; 
+            border-radius: 12px; 
+            width: 100%; 
+            max-width: 750px; 
+            border: 1px solid #334155; 
+            box-shadow: 0 10px 25px rgba(0,0,0,0.5); 
+        }
+        h1 { font-size: 20px; text-align: center; color: #38bdf8; margin-top: 0; }
+        .subtitle { text-align: center; color: #94a3b8; font-size: 12px; margin-bottom: 20px; }
+        .upload-area { 
+            margin: 15px 0; 
+            padding: 20px 10px; 
+            border: 2px dashed #475569; 
+            border-radius: 8px; 
+            text-align: center; 
+            background: #0f172a; 
+        }
         input[type="file"] { display: none; }
-        label.btn-upload { background: #3b82f6; color: white; padding: 12px 24px; border-radius: 6px; cursor: pointer; font-weight: bold; }
-        button.btn-analyze { width: 100%; background: #10b981; color: white; border: none; padding: 14px; border-radius: 6px; font-size: 16px; font-weight: bold; cursor: pointer; }
+        label.btn-upload { 
+            display: block; 
+            background: #3b82f6; 
+            color: white; 
+            padding: 12px; 
+            border-radius: 6px; 
+            cursor: pointer; 
+            font-weight: bold; 
+            font-size: 14px;
+        }
+        button.btn-analyze { 
+            width: 100%; 
+            background: #10b981; 
+            color: white; 
+            border: none; 
+            padding: 14px; 
+            border-radius: 6px; 
+            font-size: 16px; 
+            font-weight: bold; 
+            cursor: pointer; 
+        }
         button.btn-analyze:hover { background: #059669; }
-        #resultado { margin-top: 25px; padding: 20px; border-radius: 8px; background: #0f172a; border: 1px solid #334155; display: none; }
-        .status { font-size: 17px; font-weight: bold; padding: 12px; border-radius: 6px; text-align: center; margin-bottom: 15px; }
+        #resultado { 
+            margin-top: 20px; 
+            padding: 15px; 
+            border-radius: 8px; 
+            background: #0f172a; 
+            border: 1px solid #334155; 
+            display: none; 
+            word-break: break-word; 
+        }
+        .status { font-size: 15px; font-weight: bold; padding: 10px; border-radius: 6px; text-align: center; margin-bottom: 15px; }
         .status.real { background: #064e3b; color: #34d399; border: 1px solid #059669; }
         .status.editado { background: #7c2d12; color: #fdba74; border: 1px solid #ea580c; }
         .status.falso { background: #7f1d1d; color: #fca5a5; border: 1px solid #dc2626; }
-        .metric { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #334155; font-size: 14px; }
-        ul { padding-left: 20px; color: #cbd5e1; font-size: 14px; }
+        .metric { 
+            display: flex; 
+            justify-content: space-between; 
+            align-items: center;
+            padding: 8px 0; 
+            border-bottom: 1px solid #334155; 
+            font-size: 13px; 
+            gap: 10px;
+        }
+        ul { padding-left: 18px; color: #cbd5e1; font-size: 13px; }
         #elaPreview { margin-top: 15px; text-align: center; display: none; }
-        #elaPreview img { max-width: 100%; border-radius: 8px; border: 1px solid #334155; margin-top: 8px; }
+        #elaPreview img { max-width: 100%; height: auto; border-radius: 8px; border: 1px solid #334155; margin-top: 8px; }
     </style>
 </head>
 <body>
@@ -82,7 +141,6 @@ async function procesarAnalisis() {
     statusBox.style.background = "#1e293b";
     statusBox.style.color = "#38bdf8";
 
-    // Función para comprimir y redimensionar la imagen en el cliente antes de enviarla
     const comprimirYEnviar = (file) => {
         return new Promise((resolve, reject) => {
             const reader = new FileReader();
@@ -127,7 +185,6 @@ async function procesarAnalisis() {
     try {
         let archivoAEnviar = archivoOriginal;
         
-        // Si es una imagen, aplicamos la optimización para proteger la RAM de Render
         if (archivoOriginal.type.startsWith('image/')) {
             statusBox.innerText = "Optimizando resolución en navegador para proteger el servidor...";
             archivoAEnviar = await comprimirYEnviar(archivoOriginal);
