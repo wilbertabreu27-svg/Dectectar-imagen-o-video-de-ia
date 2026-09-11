@@ -1,248 +1,96 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-    <meta name="google-site-verification" content="ejLmDe6lMN-tqaRMlwFAjie1cfgHrWH3mX9w5IDz_e4" />
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Analizador Multimodal Master</title>
+    <title>Detector Agnóstico de IA - Media</title>
     <style>
-        * { box-sizing: border-box; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
-        body { 
-            background-color: #0f172a; 
-            color: #f8fafc; 
-            padding: 15px; 
-            margin: 0; 
-            display: flex; 
-            justify-content: center; 
-            align-items: flex-start;
-            min-height: 100vh;
-        }
-        .card { 
-            background: #1e293b; 
-            padding: 20px; 
-            border-radius: 12px; 
-            width: 100%; 
-            max-width: 750px; 
-            border: 1px solid #334155; 
-            box-shadow: 0 10px 25px rgba(0,0,0,0.5); 
-        }
-        h1 { font-size: 20px; text-align: center; color: #38bdf8; margin-top: 0; }
-        .subtitle { text-align: center; color: #94a3b8; font-size: 12px; margin-bottom: 20px; }
-        .upload-area { 
-            margin: 15px 0; 
-            padding: 20px 10px; 
-            border: 2px dashed #475569; 
-            border-radius: 8px; 
-            text-align: center; 
-            background: #0f172a; 
-        }
+        body { font-family: Arial, sans-serif; background: #0f172a; color: #f8fafc; text-align: center; padding: 40px; margin: 0; }
+        .container { max-width: 600px; background: #1e293b; padding: 30px; border-radius: 12px; box-shadow: 0 10px 25px rgba(0,0,0,0.3); margin: auto; }
         input[type="file"] { display: none; }
-        label.btn-upload { 
-            display: block; 
-            background: #3b82f6; 
-            color: white; 
-            padding: 12px; 
-            border-radius: 6px; 
-            cursor: pointer; 
-            font-weight: bold; 
-            font-size: 14px;
-        }
-        button.btn-analyze { 
-            width: 100%; 
-            background: #10b981; 
-            color: white; 
-            border: none; 
-            padding: 14px; 
-            border-radius: 6px; 
-            font-size: 16px; 
-            font-weight: bold; 
-            cursor: pointer; 
-        }
-        button.btn-analyze:hover { background: #059669; }
-        #resultado { 
-            margin-top: 20px; 
-            padding: 15px; 
-            border-radius: 8px; 
-            background: #0f172a; 
-            border: 1px solid #334155; 
-            display: none; 
-            word-break: break-word; 
-        }
-        .status { font-size: 15px; font-weight: bold; padding: 10px; border-radius: 6px; text-align: center; margin-bottom: 15px; }
-        .status.real { background: #064e3b; color: #34d399; border: 1px solid #059669; }
-        .status.editado { background: #7c2d12; color: #fdba74; border: 1px solid #ea580c; }
-        .status.falso { background: #7f1d1d; color: #fca5a5; border: 1px solid #dc2626; }
-        .metric { 
-            display: flex; 
-            justify-content: space-between; 
-            align-items: center;
-            padding: 8px 0; 
-            border-bottom: 1px solid #334155; 
-            font-size: 13px; 
-            gap: 10px;
-        }
-        ul { padding-left: 18px; color: #cbd5e1; font-size: 13px; }
-        #elaPreview { margin-top: 15px; text-align: center; display: none; }
-        #elaPreview img { max-width: 100%; height: auto; border-radius: 8px; border: 1px solid #334155; margin-top: 8px; }
+        .upload-btn { background: #3b82f6; color: white; padding: 12px 24px; border-radius: 6px; cursor: pointer; display: inline-block; font-weight: bold; transition: background 0.2s; }
+        .upload-btn:hover { background: #2563eb; }
+        #previewContainer { margin-top: 20px; max-height: 300px; overflow: hidden; display: flex; justify-content: center; }
+        #previewImage, #previewVideo { max-width: 100%; max-height: 250px; border-radius: 8px; display: none; }
+        #statusBox { margin-top: 20px; font-size: 1.1em; font-weight: bold; color: #38bdf8; }
+        .resultado-card { margin-top: 20px; padding: 15px; border-radius: 8px; background: #334155; display: none; text-align: left; }
     </style>
 </head>
 <body>
 
-<div class="card">
-    <h1>Sistema de Autenticidad Master</h1>
-    <p class="subtitle">Investigación Web | Detección de IA | Análisis de Cámara | Recortes | Filtros | Video</p>
+    <div class="container">
+        <h2>Detector Forense de Medios (IA Agnóstico)</h2>
+        <p>Sube una imagen o un video para analizar alteraciones sintéticas en el servidor.</p>
 
-    <div class="upload-area">
-        <input type="file" id="fileInput" accept="image/*,video/*" onchange="actualizarNombre()">
-        <label for="fileInput" class="btn-upload">Seleccionar Foto o Video</label>
-        <p id="fileName" style="margin-top: 12px; font-size: 13px; color: #94a3b8;">Ningún archivo seleccionado</p>
-    </div>
+        <label for="fileInput" class="upload-btn">Seleccionar Archivo</label>
+        <input type="file" id="fileInput" accept="image/*,video/mp4,video/quicktime,video/webm" onchange="manejarSeleccion(event)">
 
-    <button class="btn-analyze" onclick="procesarAnalisis()">Ejecutar Análisis Forense</button>
+        <div id="previewContainer">
+            <img id="previewImage" alt="Previsualización">
+            <video id="previewVideo" controls></video>
+        </div>
 
-    <div id="resultado">
-        <div id="statusBox" class="status"></div>
-        
-        <div class="metric"><span>Probabilidad de IA / Red Neuronal:</span><strong id="aiScore">-</strong></div>
-        <div class="metric"><span>Inconsistencia de Recorte/Montaje:</span><strong id="cropScore">-</strong></div>
-        <div class="metric"><span>Nivel de Filtros / Posterización:</span><strong id="filterScore">-</strong></div>
+        <div id="statusBox"></div>
 
-        <h4 style="margin-bottom: 5px; color: #38bdf8; margin-top: 15px;">Informe de Investigación Forense:</h4>
-        <ul id="detallesList"></ul>
-
-        <div id="elaPreview">
-            <h4 style="margin-bottom: 5px; color: #38bdf8;">Mapa ELA (Compresión y Píxeles):</h4>
-            <img id="elaImg" src="" alt="Mapa ELA">
+        <div id="resultadoCard" class="resultado-card">
+            <p><strong>Veredicto:</strong> <span id="resVeredicto"></span></p>
+            <p><strong>Tipo:</strong> <span id="resTipo"></span></p>
+            <p><strong>Detalles:</strong> <span id="resDetalles"></span></p>
         </div>
     </div>
-</div>
 
-<script>
-function actualizarNombre() {
-    const input = document.getElementById('fileInput');
-    const nameTxt = document.getElementById('fileName');
-    if (input.files.length > 0) nameTxt.innerText = input.files[0].name;
-}
+    <script>
+        async function manejarSeleccion(event) {
+            const archivo = event.target.files[0];
+            if (!archivo) return;
 
-async function procesarAnalisis() {
-    const fileInput = document.getElementById('fileInput');
-    const resDiv = document.getElementById('resultado');
-    const statusBox = document.getElementById('statusBox');
+            // Mostrar previsualización
+            const previewImg = document.getElementById('previewImage');
+            const previewVid = document.getElementById('previewVideo');
+            const resultadoCard = document.getElementById('resultadoCard');
+            const statusBox = document.getElementById('statusBox');
 
-    if (fileInput.files.length === 0) {
-        alert("Selecciona un archivo de imagen o video primero.");
-        return;
-    }
+            resultadoCard.style.display = 'none';
+            previewImg.style.display = 'none';
+            previewVid.style.display = 'none';
 
-    const archivoOriginal = fileInput.files[0];
-    resDiv.style.display = 'block';
-    statusBox.className = "status";
-    statusBox.innerText = "Optimizando imagen y preparando análisis forense...";
-    statusBox.style.background = "#1e293b";
-    statusBox.style.color = "#38bdf8";
-
-    const comprimirYEnviar = (file) => {
-        return new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onload = function(e) {
-                const img = new Image();
-                img.onload = function() {
-                    const MAX_WIDTH = 1200;
-                    const MAX_HEIGHT = 1200;
-                    let width = img.width;
-                    let height = img.height;
-
-                    if (width > height) {
-                        if (width > MAX_WIDTH) {
-                            height *= MAX_WIDTH / width;
-                            width = MAX_WIDTH;
-                        }
-                    } else {
-                        if (height > MAX_HEIGHT) {
-                            width *= MAX_HEIGHT / height;
-                            height = MAX_HEIGHT;
-                        }
-                    }
-
-                    const canvas = document.createElement('canvas');
-                    canvas.width = width;
-                    canvas.height = height;
-                    const ctx = canvas.getContext('2d');
-                    ctx.drawImage(img, 0, 0, width, height);
-
-                    canvas.toBlob(function(blob) {
-                        resolve(blob);
-                    }, 'image/jpeg', 0.85);
-                }
-                img.onerror = reject;
-                img.src = e.target.result;
+            const urlArchivo = URL.createObjectURL(archivo);
+            if (archivo.type.startsWith('video/')) {
+                previewVid.src = urlArchivo;
+                previewVid.style.display = 'block';
+            } else {
+                previewImg.src = urlArchivo;
+                previewImg.style.display = 'block';
             }
-            reader.onerror = reject;
-            reader.readAsDataURL(file);
-        });
-    };
 
-    try {
-        let archivoAEnviar = archivoOriginal;
-        
-        if (archivoOriginal.type.startsWith('image/')) {
-            statusBox.innerText = "Optimizando resolución en navegador para proteger el servidor...";
-            archivoAEnviar = await comprimirYEnviar(archivoOriginal);
+            // Enviar al servidor Flask
+            const formData = new FormData();
+            formData.append('file', archivo);
+
+            statusBox.innerText = "Procesando archivo en el servidor...";
+
+            try {
+                const response = await fetch('/analizar', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    statusBox.innerText = "";
+                    document.getElementById('resVeredicto').innerText = data.veredicto;
+                    document.getElementById('resTipo').innerText = data.tipo.toUpperCase();
+                    document.getElementById('resDetalles').innerText = data.detalles;
+                    resultadoCard.style.display = 'block';
+                } else {
+                    statusBox.innerText = "Error: " + (data.error || "No se pudo procesar");
+                }
+            } catch (error) {
+                statusBox.innerText = "Error de conexión con el servidor.";
+                console.error(error);
+            }
         }
-
-        const formData = new FormData();
-        formData.append('file', archivoAEnviar, archivoOriginal.name);
-
-        statusBox.innerText = "Investigando huella web, espectro de frecuencias, recortes y firmas sintéticas...";
-
-        const response = await fetch('/analizar_master', {
-            method: 'POST',
-            body: formData
-        });
-
-        const data = await response.json();
-
-        if (data.error) {
-            statusBox.className = "status falso";
-            statusBox.innerText = "Error: " + data.error;
-            return;
-        }
-
-        if (data.diagnostico.includes("REAL")) {
-            statusBox.className = "status real";
-        } else if (data.diagnostico.includes("MANIPULADA") || data.diagnostico.includes("FILTROS")) {
-            statusBox.className = "status editado";
-        } else {
-            statusBox.className = "status falso";
-        }
-        
-        statusBox.innerText = data.diagnostico;
-
-        document.getElementById('aiScore').innerText = data.probabilidad_ia;
-        document.getElementById('cropScore').innerText = data.indice_recorte;
-        document.getElementById('filterScore').innerText = data.nivel_filtro;
-
-        const list = document.getElementById('detallesList');
-        list.innerHTML = "";
-        data.investigacion.forEach(d => {
-            let li = document.createElement('li');
-            li.innerText = d;
-            list.appendChild(li);
-        });
-
-        if (data.mapa_ela) {
-            document.getElementById('elaImg').src = data.mapa_ela;
-            document.getElementById('elaPreview').style.display = "block";
-        } else {
-            document.getElementById('elaPreview').style.display = "none";
-        }
-
-    } catch (err) {
-        statusBox.className = "status falso";
-        statusBox.innerText = "Error de conexión con el servidor Python o fallo al procesar la imagen.";
-    }
-}
-</script>
-
+    </script>
 </body>
 </html>
