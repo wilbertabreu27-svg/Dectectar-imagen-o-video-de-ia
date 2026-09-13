@@ -81,7 +81,6 @@ def analizar_video():
             if not ret:
                 break
             if count % frame_interval == 0:
-                # Convertir BGR de OpenCV a RGB para PIL
                 rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 image = Image.fromarray(rgb_frame)
                 
