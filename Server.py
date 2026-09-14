@@ -8,7 +8,10 @@ import time
 import traceback
 import requests
 import base64
+import hashlib
+import json
 from io import BytesIO
+from PIL import ImageDraw, ImageFilter
 
 # Reduce parallelism inside numeric libraries to lower memory use
 os.environ.setdefault('OMP_NUM_THREADS', '1')
@@ -68,6 +71,8 @@ else:
     DEEP_AVAILABLE = (MEM_LIMIT_BYTES >= DEEP_REQUIRED_MB * 1024 * 1024)
 HF_API_TOKEN = os.environ.get('HF_API_TOKEN')
 USE_REMOTE_WHEN_AVAILABLE = os.environ.get('USE_REMOTE_WHEN_AVAILABLE', 'true').lower() in ('1','true','yes')
+HF_CACHE_DIR = os.environ.get('HF_CACHE_DIR', 'hf_cache')
+os.makedirs(HF_CACHE_DIR, exist_ok=True)
 
 
 def get_model():
@@ -141,6 +146,10 @@ HTML_TEMPLATE = """
             <p><b>Puntuación de Anomalía Máxima:</b> {{ result.max_score }}%</p>
             <p><b>Anomalías Temporales / Cortes bruscos (CCTV):</b> {{ result.temporal_anomalies }}</p>
             <p><b>Detalles:</b> {{ result.details }}</p>
+            {% if result.heatmap %}
+            <p><b>Mapa de calor (heatmap):</b></p>
+            <img src="{{ result.heatmap }}" alt="heatmap" style="max-width:100%;border-radius:6px;border:1px solid #334155;"/>
+            {% endif %}
         </div>
         {% endif %}
     </div>
@@ -233,7 +242,7 @@ def forensic_grid_analysis(image_or_path, patch_size=256, stride=128):
     # 2) Aplicar análisis profundo SOLO a los N parches más sospechosos (local o remoto según disponibilidad).
 
     # Limitar número de parches analizados por heurístico para rendimiento
-    max_sampled = 128
+    max_sampled = 256
     candidates = []  # list of (heur_score, (x,y,box), patch_image)
     patch_count = 0
     for y in range(0, height - patch_size + 1, stride):
@@ -259,7 +268,7 @@ def forensic_grid_analysis(image_or_path, patch_size=256, stride=128):
             return 0.0
 
     # Seleccionar top-K parches por heurística
-    top_k = min(12, len(candidates))
+    top_k = min(24, len(candidates))
     candidates.sort(key=lambda t: t[0], reverse=True)
     selected = candidates[:top_k]
 
@@ -278,16 +287,50 @@ def forensic_grid_analysis(image_or_path, patch_size=256, stride=128):
         deep_scores.append(ds)
 
     # También intentar analizar la imagen completa si al menos un parche presentó alta sospecha
-    try_full = any(s >= 40 for s in deep_scores) or any(c[0] >= 40 for c in candidates)
-    if try_full:
-        try:
-            full = analyze_patch(img)
-            deep_scores.append(full)
-        except Exception:
-            pass
+    # Llamada remota completa si está disponible y/o si muchos parches son sospechosos
+    try_full = False
+    try:
+        if HF_API_TOKEN and USE_REMOTE_WHEN_AVAILABLE:
+            # llamar primero a la inferencia remota sobre la imagen completa
+            full_remote = remote_model_infer(img)
+            deep_scores.append(full_remote)
+            try_full = True
+        else:
+            try_full = any(s >= 40 for s in deep_scores) or any(c[0] >= 40 for c in candidates)
+            if try_full:
+                try:
+                    full = analyze_patch(img)
+                    deep_scores.append(full)
+                except Exception:
+                    pass
+    except Exception:
+        # si la remota falla, seguir con lo que tengamos
+        try_full = any(s >= 40 for s in deep_scores) or any(c[0] >= 40 for c in candidates)
 
     max_score = max(deep_scores) if deep_scores else 0.0
-    return max_score
+
+    # Generar heatmap simple basado en heur_score y deep_scores
+    try:
+        heat = Image.new('L', (width, height), color=0)
+        draw = ImageDraw.Draw(heat)
+        # map selected deep scores back to positions
+        for idx, (hscore, box, patch) in enumerate(selected):
+            x0, y0, x1, y1 = box
+            ds = deep_scores[idx] if idx < len(deep_scores) else hscore
+            val = int(max(0, min(255, (ds / 100.0) * 255)))
+            draw.rectangle([x0, y0, x1, y1], fill=val)
+        # blur for nicer visualization
+        heat = heat.filter(ImageFilter.GaussianBlur(radius=patch_size//8))
+        buf = BytesIO()
+        heat.convert('RGB').save(buf, format='PNG')
+        buf.seek(0)
+        heat_b64 = base64.b64encode(buf.read()).decode('ascii')
+        heatmap_data = f"data:image/png;base64,{heat_b64}"
+    except Exception:
+        heatmap_data = None
+
+    # devolver máximo y heatmap
+    return max_score, heatmap_data
 
 def analyze_video_frames(video_path, max_frames=20):
     # Prefiltro ligero: muestrear fotogramas y buscar anomalías simples
@@ -332,7 +375,11 @@ def analyze_video_frames(video_path, max_frames=20):
         cv_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         pil_img = Image.fromarray(cv_rgb)
         try:
-            score = forensic_grid_analysis(pil_img)
+            res = forensic_grid_analysis(pil_img)
+            if isinstance(res, tuple):
+                score = res[0]
+            else:
+                score = res
         except Exception:
             score = 50.0
         frame_scores.append(score)
@@ -476,10 +523,25 @@ def remote_model_infer(pil_img, timeout=30):
     url = f"https://api-inference.huggingface.co/models/{MODEL_NAME}"
     headers = {"Authorization": f"Bearer {HF_API_TOKEN}"}
 
+    # Use a cache keyed by image bytes + model name
     buf = BytesIO()
     pil_img.save(buf, format='PNG')
     buf.seek(0)
     data = buf.read()
+
+    # cache key
+    h = hashlib.sha256()
+    h.update(MODEL_NAME.encode('utf-8'))
+    h.update(data)
+    key = h.hexdigest()
+    cache_file = os.path.join(HF_CACHE_DIR, key + '.json')
+    if os.path.exists(cache_file):
+        try:
+            with open(cache_file, 'r', encoding='utf-8') as cf:
+                cached = json.load(cf)
+                return float(cached.get('score', 0.0))
+        except Exception:
+            pass
 
     r = requests.post(url, headers=headers, data=data, timeout=timeout)
     if r.status_code != 200:
@@ -511,7 +573,14 @@ def remote_model_infer(pil_img, timeout=30):
                 return (1.0 - float(item.get('score', 0.0))) * 100.0
 
         # Fallback: devolver mejor score *100
-        return best_score * 100.0
+        score_out = best_score * 100.0
+        # cache
+        try:
+            with open(cache_file, 'w', encoding='utf-8') as cf:
+                json.dump({'score': score_out, 'resp': resp}, cf)
+        except Exception:
+            pass
+        return score_out
 
     # Si la respuesta no es la esperada, intentar heurístico
     raise RuntimeError('Formato de respuesta HF inesperado')
@@ -540,10 +609,16 @@ def index():
                 suspicious, score, details = prefilter_image(filepath)
                 # Forzar análisis profundo desde la UI
                 if force_deep or suspicious:
-                    max_score = forensic_grid_analysis(filepath)
+                    res = forensic_grid_analysis(filepath)
+                    if isinstance(res, tuple):
+                        max_score, heatmap_data = res
+                    else:
+                        max_score = res
+                        heatmap_data = None
                 else:
                     # No sospecha en prefiltro: devolver puntuación ligera
                     max_score = score
+                    heatmap_data = None
                 anomalies = 0
                 file_type = "IMAGEN"
 
@@ -554,7 +629,8 @@ def index():
                 "type": file_type,
                 "max_score": round(max_score, 2),
                 "temporal_anomalies": anomalies,
-                "details": f"Análisis de parches y coherencia aplicado. Puntuación de riesgo de manipulación: {round(max_score, 2)}%"
+                "details": f"Análisis de parches y coherencia aplicado. Puntuación de riesgo de manipulación: {round(max_score, 2)}%",
+                "heatmap": heatmap_data if 'heatmap_data' in locals() else None
             }
         except Exception as e:
             # Log server-side
