@@ -22,6 +22,47 @@ feature_extractor = None
 _model_lock = threading.Lock()
 DEBUG_SHOW_STACK = os.environ.get('DEBUG_SHOW_STACK', 'false').lower() == 'true'
 PREFILTER_THRESHOLD = 20.0  # reducir umbral para más sensibilidad
+DEEP_REQUIRED_MB = int(os.environ.get('DEEP_REQUIRED_MB', '1000'))  # mínimo MB para permitir modelo
+
+
+def detect_memory_limit_bytes():
+    """Detecta límite de memoria del contenedor (cgroup v1/v2) o total del sistema.
+    Devuelve bytes o None si no se puede determinar.
+    """
+    try:
+        # cgroup v1
+        path1 = '/sys/fs/cgroup/memory/memory.limit_in_bytes'
+        if os.path.exists(path1):
+            with open(path1, 'r') as f:
+                v = int(f.read().strip())
+                return v
+        # cgroup v2
+        path2 = '/sys/fs/cgroup/memory.max'
+        if os.path.exists(path2):
+            with open(path2, 'r') as f:
+                txt = f.read().strip()
+                if txt.isdigit():
+                    return int(txt)
+                # 'max' means no limit
+        # fallback a /proc/meminfo
+        if os.path.exists('/proc/meminfo'):
+            with open('/proc/meminfo', 'r') as f:
+                for line in f:
+                    if line.startswith('MemTotal:'):
+                        parts = line.split()
+                        kb = int(parts[1])
+                        return kb * 1024
+    except Exception:
+        return None
+    return None
+
+
+MEM_LIMIT_BYTES = detect_memory_limit_bytes()
+if MEM_LIMIT_BYTES is None:
+    # desconocido: conservador, desactivar modo profundo
+    DEEP_AVAILABLE = False
+else:
+    DEEP_AVAILABLE = (MEM_LIMIT_BYTES >= DEEP_REQUIRED_MB * 1024 * 1024)
 
 
 def get_model():
@@ -31,6 +72,9 @@ def get_model():
     global model, feature_extractor
     if model is not None and feature_extractor is not None:
         return model, feature_extractor
+
+    if not DEEP_AVAILABLE:
+        raise RuntimeError(f"Análisis profundo deshabilitado: memoria del contenedor < {DEEP_REQUIRED_MB} MB")
 
     with _model_lock:
         if model is not None and feature_extractor is not None:
@@ -82,6 +126,9 @@ HTML_TEMPLATE = """
             <label style="display:block;margin:10px 0;color:#cbd5e1;"><input type="checkbox" name="force_deep"> Forzar análisis profundo</label>
             <button type="submit">Analizar Alteraciones o Recortes</button>
         </form>
+        {% if not deep_available %}
+        <div style="margin-top:10px;padding:10px;background:#7f1d1d;color:#fee2e2;border-radius:6px;">Análisis profundo DESACTIVADO por memoria limitada del contenedor. En Render gratuito (512MB) no se puede cargar modelos pesados. Usa "Forzar análisis profundo" solo si sabes que la instancia tiene más RAM.</div>
+        {% endif %}
         {% if result %}
         <div class="result">
             <h3>Veredicto: {{ result.verdict }}</h3>
@@ -98,7 +145,16 @@ HTML_TEMPLATE = """
 
 def analyze_patch(patch_img):
     # Cargar modelo/extractor perezosamente
-    model, feature_extractor = get_model()
+    try:
+        model, feature_extractor = get_model()
+    except Exception as e:
+        # Modelo pesado no disponible (memoria o dependencias)
+        # Devolver puntuación conservadora basada en heurísticos ligeros
+        try:
+            sus, score, details = prefilter_image(patch_img)
+            return score
+        except Exception:
+            return 50.0
     try:
         import torch
         device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -405,7 +461,7 @@ def index():
             except Exception:
                 pass
             
-    return render_template_string(HTML_TEMPLATE, result=result)
+    return render_template_string(HTML_TEMPLATE, result=result, deep_available=DEEP_AVAILABLE)
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
