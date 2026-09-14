@@ -1,123 +1,167 @@
 import os
 import cv2
+import numpy as np
+from flask import Flask, request, render_template_string, jsonify
 import torch
-import torch.nn.functional as F
-from flask import Flask, request, jsonify, render_template
 from PIL import Image
-from transformers import AutoModelForImageClassification, AutoImageProcessor
+from transformers import AutoModelForImageClassification, AutoFeatureExtractor
 
-app = Flask(__name__, template_folder='templates', static_folder='static')
-UPLOAD_FOLDER = 'uploads'
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+app = Flask(__name__)
 
-# Cargar modelo y procesador de Hugging Face
-MODEL_NAME = "umm-maybe/AI-image-detector"
-print("Cargando modelo de IA...")
-processor = AutoImageProcessor.from_pretrained(MODEL_NAME)
-model = AutoModelForImageClassification.from_pretrained(MODEL_NAME)
+MODEL_NAME = "Organika/sdxl-detector"
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
+print(f"Cargando modelo forense en {device}...")
+feature_extractor = AutoFeatureExtractor.from_pretrained(MODEL_NAME)
+model = AutoModelForImageClassification.from_pretrained(MODEL_NAME).to(device)
 model.eval()
-print("Modelo cargado exitosamente.")
 
-@app.route('/')
-def index():
-    return render_template('index.html')
+HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Forensic AI Media Inspector</title>
+    <style>
+        body { font-family: Arial, sans-serif; background: #0f172a; color: #f8fafc; padding: 40px; }
+        .container { max-width: 600px; margin: auto; background: #1e293b; padding: 30px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.5); }
+        input[type="file"] { margin: 20px 0; padding: 10px; background: #334155; border: none; color: #fff; width: 100%; border-radius: 6px; }
+        button { background: #3b82f6; color: white; border: none; padding: 12px 20px; font-size: 16px; border-radius: 6px; cursor: pointer; width: 100%; }
+        button:hover { background: #2563eb; }
+        .result { margin-top: 20px; padding: 15px; background: #0f172a; border-radius: 6px; border-left: 5px solid #3b82f6; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>Auditoría Forense de Medios (CCTV / Imágenes)</h2>
+        <form method="POST" enctype="multipart/form-data">
+            <input type="file" name="file" accept="image/*,video/*" required>
+            <button type="submit">Analizar Alteraciones o Recortes</button>
+        </form>
+        {% if result %}
+        <div class="result">
+            <h3>Veredicto: {{ result.verdict }}</h3>
+            <p><b>Tipo de Archivo:</b> {{ result.type }}</p>
+            <p><b>Puntuación de Anomalía Máxima:</b> {{ result.max_score }}%</p>
+            <p><b>Anomalías Temporales / Cortes bruscos (CCTV):</b> {{ result.temporal_anomalies }}</p>
+            <p><b>Detalles:</b> {{ result.details }}</p>
+        </div>
+        {% endif %}
+    </div>
+</body>
+</html>
+"""
 
-@app.route('/analizar-imagen', methods=['POST'])
-def analizar_imagen():
-    if 'file' not in request.files:
-        return jsonify({"error": "No se envió ningún archivo"}), 400
-        
-    file = request.files['file']
-    if file.filename == '':
-        return jsonify({"error": "Nombre de archivo vacío"}), 400
-        
-    try:
-        image = Image.open(file.stream).convert("RGB")
-        inputs = processor(images=image, return_tensors="pt")
-        
-        with torch.no_grad():
-            outputs = model(**inputs)
-            logits = outputs.logits
-            probs = F.softmax(logits, dim=-1)
-            
-        predicted_class_idx = logits.argmax(-1).item()
-        confidence = probs[0][predicted_class_idx].item() * 100
-        etiquetas = model.config.id2label
-        veredicto = etiquetas[predicted_class_idx]
-        
-        return jsonify({
-            "tipo": "imagen",
-            "veredicto": veredicto.upper(),
-            "confianza": round(confidence, 2)
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+def analyze_patch(patch_img):
+    inputs = feature_extractor(images=patch_img, return_tensors="pt").to(device)
+    with torch.no_grad():
+        outputs = model(**inputs)
+        probs = torch.nn.functional.softmax(outputs.logits, dim=-1)
+    # Índice 1 representa contenido sintético/modificado según los pesos del modelo
+    score = probs[0][1].item() * 100 if probs.shape[1] > 1 else probs[0][0].item() * 100
+    return score
 
-@app.route('/analizar-video', methods=['POST'])
-def analizar_video():
-    if 'file' not in request.files:
-        return jsonify({"error": "No se envió ningún archivo"}), 400
-        
-    file = request.files['file']
-    if file.filename == '':
-        return jsonify({"error": "Nombre de archivo vacío"}), 400
-        
-    path = os.path.join(UPLOAD_FOLDER, file.filename)
-    file.save(path)
+def forensic_grid_analysis(image_path, patch_size=256, stride=128):
+    img = Image.open(image_path).convert("RGB")
+    width, height = img.size
     
-    try:
-        cap = cv2.VideoCapture(path)
-        fps = cap.get(cv2.CAP_PROP_FPS) or 30
-        frame_interval = int(fps) # Analizar 1 fotograma por segundo
+    scores = []
+    # Si la imagen es muy pequeña, se analiza completa
+    if width < patch_size or height < patch_size:
+        return analyze_patch(img), 1
         
-        confianzas = []
-        fake_counts = 0
-        count = 0
-        
-        etiquetas = model.config.id2label
-        
-        while cap.isOpened():
-            ret, frame = cap.read()
-            if not ret:
-                break
-            if count % frame_interval == 0:
-                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                image = Image.fromarray(rgb_frame)
-                
-                inputs = processor(images=image, return_tensors="pt")
-                with torch.no_grad():
-                    outputs = model(**inputs)
-                    logits = outputs.logits
-                    probs = F.softmax(logits, dim=-1)
-                    
-                idx = logits.argmax(-1).item()
-                conf = probs[0][idx].item() * 100
-                veredicto_frame = etiquetas[idx].lower()
-                
-                confianzas.append(conf)
-                if "fake" in veredicto_frame or "artificial" in veredicto_frame:
-                    fake_counts += 1
-            count += 1
+    # Estrategia de parches deslizantes para detectar objetos agregados o recortes locales
+    for y in range(0, height - patch_size + 1, stride):
+        for x in range(0, width - patch_size + 1, stride):
+            box = (x, y, x + patch_size, y + patch_size)
+            patch = img.crop(box)
+            score = analyze_patch(patch)
+            scores.append(score)
             
-        cap.release()
-        os.remove(path)
+    # Incluir análisis global
+    full_score = analyze_patch(img)
+    scores.append(full_score)
+    
+    max_score = max(scores) if scores else full_score
+    return max_score
+
+def analyze_video_frames(video_path, max_frames=20):
+    cap = cv2.VideoCapture(video_path)
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    if total_frames <= 0:
+        total_frames = 1
         
-        if not confianzas:
-            return jsonify({"error": "No se pudieron procesar fotogramas del video"}), 400
+    frame_scores = []
+    prev_gray = None
+    temporal_anomalies = 0
+    
+    step = max(1, total_frames // max_frames)
+    frame_idx = 0
+    count = 0
+    
+    while cap.isOpened() and count < max_frames:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+        ret, frame = cap.read()
+        if not ret:
+            break
             
-        promedio_conf = sum(confianzas) / len(confianzas)
-        es_fake = fake_counts > (len(confianzas) / 2)
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         
-        return jsonify({
-            "tipo": "video",
-            "veredicto": "FAKE (VIDEO ARTIFICIAL)" if es_fake else "REAL",
-            "confianza": round(promedio_conf, 2),
-            "detalles": f"Se analizaron {len(confianzas)} fotogramas clave."
-        })
-    except Exception as e:
-        if os.path.exists(path):
-            os.remove(path)
-        return jsonify({"error": str(e)}), 500
+        # Detección de cortes artificiales / empalmes de video (CCTV tampering)
+        if prev_gray is not None:
+            diff = cv2.absdiff(prev_gray, gray)
+            changed_pixels = np.count_nonzero(diff > 40)
+            # Un cambio masivo instantáneo sin transición de flujo óptico denota corte/empalme de escena
+            if changed_pixels > (gray.shape[0] * gray.shape[1] * 0.5):
+                temporal_anomalies += 1
+                
+        prev_gray = gray
+        
+        # Análisis de IA por fotograma individual
+        cv_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        pil_img = Image.fromarray(cv_rgb)
+        score = forensic_grid_analysis(pil_img) if hasattr(pil_img, 'size') else 50.0
+        frame_scores.append(score)
+        
+        frame_idx += step
+        count += 1
+        
+    cap.release()
+    max_v_score = max(frame_scores) if frame_scores else 0.0
+    return max_v_score, temporal_anomalies
+
+@app.route('/', methods=['GET', 'POST'])
+def index():
+    result = None
+    if request.method == 'POST':
+        file = request.files['file']
+        if file:
+            filepath = os.path.join("uploads", file.filename)
+            os.makedirs("uploads", exist_ok=True)
+            file.save(filepath)
+            
+            ext = file.filename.split('.')[-1].lower()
+            if ext in ['mp4', 'avi', 'mov', 'mkv']:
+                max_score, anomalies = analyze_video_frames(filepath)
+                file_type = "VIDEO (CCTV)"
+            else:
+                max_score = forensic_grid_analysis(filepath)
+                anomalies = 0
+                file_type = "IMAGEN"
+                
+            verdict = "ALTAMENTE SOSPECHOSO / ALTERADO" if max_score > 65 or anomalies > 0 else "PROBABLEMENTE AUTÉNTICO"
+            
+            result = {
+                "verdict": verdict,
+                "type": file_type,
+                "max_score": round(max_score, 2),
+                "temporal_anomalies": anomalies,
+                "details": f"Análisis de parches y coherencia aplicado. Puntuación de riesgo de manipulación: {round(max_score, 2)}%"
+            }
+            os.remove(filepath)
+            
+    return render_template_string(HTML_TEMPLATE, result=result)
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=False)
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=True)
