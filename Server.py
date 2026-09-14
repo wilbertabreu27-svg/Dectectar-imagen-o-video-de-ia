@@ -6,6 +6,9 @@ from PIL import Image, ExifTags
 import threading
 import time
 import traceback
+import requests
+import base64
+from io import BytesIO
 
 # Reduce parallelism inside numeric libraries to lower memory use
 os.environ.setdefault('OMP_NUM_THREADS', '1')
@@ -63,6 +66,7 @@ if MEM_LIMIT_BYTES is None:
     DEEP_AVAILABLE = False
 else:
     DEEP_AVAILABLE = (MEM_LIMIT_BYTES >= DEEP_REQUIRED_MB * 1024 * 1024)
+HF_API_TOKEN = os.environ.get('HF_API_TOKEN')
 
 
 def get_model():
@@ -84,7 +88,7 @@ def get_model():
             import torch
             from transformers import AutoModelForImageClassification, AutoFeatureExtractor
         except Exception as e:
-            raise RuntimeError(f"No se han podido cargar dependencias ML: {e}")
+            raise RuntimeError(f"No se han podido cargar dependencias ML: {e}. Si no puedes instalarlas en este contenedor, define HF_API_TOKEN para usar la API de Hugging Face como fallback.")
 
         device = "cuda" if torch.cuda.is_available() else "cpu"
         # Intentar reducir el uso de memoria durante la deserialización
@@ -149,6 +153,15 @@ def analyze_patch(patch_img):
         model, feature_extractor = get_model()
     except Exception as e:
         # Modelo pesado no disponible (memoria o dependencias)
+        # Intentar usar la API de Hugging Face si hay token
+        if HF_API_TOKEN:
+            try:
+                score = remote_model_infer(patch_img)
+                if score is not None:
+                    return score
+            except Exception:
+                pass
+
         # Devolver puntuación conservadora basada en heurísticos ligeros
         try:
             sus, score, details = prefilter_image(patch_img)
@@ -191,6 +204,15 @@ def forensic_grid_analysis(image_or_path, patch_size=256, stride=128):
 
     width, height = img.size
     scores = []
+
+    # Si el contenedor no permite análisis profundo local pero disponemos de HF_API_TOKEN,
+    # usar la API remota con la imagen completa (evita múltiples llamadas por parche).
+    if not DEEP_AVAILABLE and HF_API_TOKEN:
+        try:
+            return remote_model_infer(img)
+        except Exception:
+            # continuar con análisis local heurístico
+            pass
 
     # Si la imagen es muy pequeña, se analiza completa
     if width < patch_size or height < patch_size:
@@ -397,6 +419,57 @@ def prefilter_video(video_path, samples=6):
     # Si más de la mitad de muestras son sospechosas, marcar el video
     suspicious = suspicious_count >= max(1, samples // 2)
     return suspicious, avg, scores
+
+
+def remote_model_infer(pil_img, timeout=30):
+    """Envía la imagen a la API de Inference de Hugging Face y devuelve una puntuación (0-100).
+    Requiere HF_API_TOKEN en variables de entorno.
+    """
+    if not HF_API_TOKEN:
+        raise RuntimeError('HF_API_TOKEN no configurado')
+
+    url = f"https://api-inference.huggingface.co/models/{MODEL_NAME}"
+    headers = {"Authorization": f"Bearer {HF_API_TOKEN}"}
+
+    buf = BytesIO()
+    pil_img.save(buf, format='PNG')
+    buf.seek(0)
+    data = buf.read()
+
+    r = requests.post(url, headers=headers, data=data, timeout=timeout)
+    if r.status_code != 200:
+        raise RuntimeError(f"HF API error: {r.status_code} {r.text}")
+
+    try:
+        resp = r.json()
+    except Exception:
+        raise RuntimeError('Respuesta no JSON de HF Inference')
+
+    # Intentar interpretar la respuesta
+    # Formato esperado: lista de {label, score}
+    if isinstance(resp, list) and len(resp) > 0 and isinstance(resp[0], dict):
+        # En muchos detectores: labels como 'REAL'/'FAKE' o 'SYNTHETIC'
+        best = max(resp, key=lambda x: x.get('score', 0))
+        best_label = str(best.get('label', '')).lower()
+        best_score = float(best.get('score', 0.0))
+
+        # Si encontramos etiqueta que sugiere manipulado/ai/fake, usar su score
+        for item in resp:
+            lab = str(item.get('label', '')).lower()
+            if any(k in lab for k in ('synt', 'fake', 'ai', 'manip', 'alter')):
+                return float(item.get('score', 0.0)) * 100.0
+
+        # Si aparece 'real' o 'authentic', invertir
+        for item in resp:
+            lab = str(item.get('label', '')).lower()
+            if any(k in lab for k in ('real', 'auth', 'genuine')):
+                return (1.0 - float(item.get('score', 0.0))) * 100.0
+
+        # Fallback: devolver mejor score *100
+        return best_score * 100.0
+
+    # Si la respuesta no es la esperada, intentar heurístico
+    raise RuntimeError('Formato de respuesta HF inesperado')
 
 @app.route('/', methods=['GET', 'POST'])
 def index():
