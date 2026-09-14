@@ -19,6 +19,7 @@ MODEL_NAME = "Organika/sdxl-detector"
 model = None
 feature_extractor = None
 _model_lock = threading.Lock()
+PREFILTER_THRESHOLD = 20.0  # reducir umbral para más sensibilidad
 
 
 def get_model():
@@ -68,6 +69,7 @@ HTML_TEMPLATE = """
         <h2>Auditoría Forense de Medios (CCTV / Imágenes)</h2>
         <form method="POST" enctype="multipart/form-data">
             <input type="file" name="file" accept="image/*,video/*" required>
+            <label style="display:block;margin:10px 0;color:#cbd5e1;"><input type="checkbox" name="force_deep"> Forzar análisis profundo</label>
             <button type="submit">Analizar Alteraciones o Recortes</button>
         </form>
         {% if result %}
@@ -130,7 +132,7 @@ def forensic_grid_analysis(image_or_path, patch_size=256, stride=128):
 
     # Estrategia de parches deslizantes para detectar objetos agregados o recortes locales
     # Limitar el número máximo de parches para evitar sobrecarga en entornos con memoria limitada
-    max_patches = 64
+    max_patches = 128
     patch_count = 0
     for y in range(0, height - patch_size + 1, stride):
         for x in range(0, width - patch_size + 1, stride):
@@ -261,8 +263,43 @@ def prefilter_image(image_input):
         if ratio < 0.5:
             score += 20
 
-    suspicious = score >= 30
-    details = f"lap_var={lap_var:.1f}, edge_density={edge_density:.3f}, score={score:.1f}"
+    # Error Level Analysis (ELA) ligero: re-guardar JPEG y comparar
+    try:
+        from io import BytesIO
+        buf = BytesIO()
+        # Re-guardar con calidad 95 y medir la diferencia media
+        img.convert('RGB').save(buf, format='JPEG', quality=95)
+        buf.seek(0)
+        reimg = Image.open(buf)
+        ela = np.abs(np.array(img.convert('RGB'), dtype=np.int16) - np.array(reimg.convert('RGB'), dtype=np.int16))
+        ela_mean = float(np.mean(ela))
+        # ELA mean alto indica posibles ediciones locales
+        if ela_mean > 10:
+            score += min(30, (ela_mean - 10))
+    except Exception:
+        ela_mean = 0.0
+
+    # Detección de anomalías en bordes/cortes: comparar borde exterior con región interior
+    try:
+        h, w = gray.shape
+        bw = max(4, int(min(w, h) * 0.05))
+        outer_top = gray[0:bw, :]
+        inner_top = gray[bw:bw*2, :]
+        top_diff = float(np.mean(np.abs(outer_top.astype(int) - inner_top.astype(int))))
+
+        outer_left = gray[:, 0:bw]
+        inner_left = gray[:, bw:bw*2]
+        left_diff = float(np.mean(np.abs(outer_left.astype(int) - inner_left.astype(int))))
+
+        border_score = (top_diff + left_diff) / 2.0
+        if border_score > 8:
+            score += 25
+    except Exception:
+        border_score = 0.0
+
+    # Umbral configurable
+    suspicious = score >= PREFILTER_THRESHOLD
+    details = f"lap_var={lap_var:.1f}, edge_density={edge_density:.3f}, ela_mean={ela_mean:.1f}, border_score={border_score:.1f}, score={score:.1f}"
     return suspicious, float(score), details
 
 
@@ -300,6 +337,7 @@ def index():
     result = None
     if request.method == 'POST':
         file = request.files['file']
+        force_deep = True if request.form.get('force_deep') == 'on' else False
         if file:
             filepath = os.path.join("uploads", file.filename)
             os.makedirs("uploads", exist_ok=True)
@@ -312,7 +350,8 @@ def index():
             else:
                 # Prefiltro ligero en imagenes
                 suspicious, score, details = prefilter_image(filepath)
-                if suspicious:
+                # Forzar análisis profundo desde la UI
+                if force_deep or suspicious:
                     max_score = forensic_grid_analysis(filepath)
                 else:
                     # No sospecha en prefiltro: devolver puntuación ligera
