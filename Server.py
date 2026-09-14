@@ -67,6 +67,7 @@ if MEM_LIMIT_BYTES is None:
 else:
     DEEP_AVAILABLE = (MEM_LIMIT_BYTES >= DEEP_REQUIRED_MB * 1024 * 1024)
 HF_API_TOKEN = os.environ.get('HF_API_TOKEN')
+USE_REMOTE_WHEN_AVAILABLE = os.environ.get('USE_REMOTE_WHEN_AVAILABLE', 'true').lower() in ('1','true','yes')
 
 
 def get_model():
@@ -148,6 +149,15 @@ HTML_TEMPLATE = """
 """
 
 def analyze_patch(patch_img):
+    # Si se ha configurado, usar siempre la API remota (simula modelo pesado sin RAM local)
+    if HF_API_TOKEN and USE_REMOTE_WHEN_AVAILABLE:
+        try:
+            score = remote_model_infer(patch_img)
+            return score
+        except Exception:
+            # si la remota falla, continuar e intentar cargar modelo local
+            pass
+
     # Cargar modelo/extractor perezosamente
     try:
         model, feature_extractor = get_model()
@@ -218,30 +228,65 @@ def forensic_grid_analysis(image_or_path, patch_size=256, stride=128):
     if width < patch_size or height < patch_size:
         return analyze_patch(img)
 
-    # Estrategia de parches deslizantes para detectar objetos agregados o recortes locales
-    # Limitar el número máximo de parches para evitar sobrecarga en entornos con memoria limitada
-    max_patches = 128
+    # Estrategia en dos fases para minimizar memoria y llamadas remotas:
+    # 1) Prefiltro ligero por parches (heurístico local) para encontrar regiones sospechosas.
+    # 2) Aplicar análisis profundo SOLO a los N parches más sospechosos (local o remoto según disponibilidad).
+
+    # Limitar número de parches analizados por heurístico para rendimiento
+    max_sampled = 128
+    candidates = []  # list of (heur_score, (x,y,box), patch_image)
     patch_count = 0
     for y in range(0, height - patch_size + 1, stride):
         for x in range(0, width - patch_size + 1, stride):
             box = (x, y, x + patch_size, y + patch_size)
             patch = img.crop(box)
-            score = analyze_patch(patch)
-            scores.append(score)
+            try:
+                sus, hscore, _ = prefilter_image(patch)
+            except Exception:
+                hscore = 0.0
+            candidates.append((hscore, box, patch))
             patch_count += 1
-            if patch_count >= max_patches:
+            if patch_count >= max_sampled:
                 break
-        if patch_count >= max_patches:
+        if patch_count >= max_sampled:
             break
 
-    # Incluir análisis global (si queda presupuesto)
-    try:
-        full_score = analyze_patch(img)
-        scores.append(full_score)
-    except Exception:
-        pass
+    if not candidates:
+        # Fallback: analyze full image
+        try:
+            return analyze_patch(img)
+        except Exception:
+            return 0.0
 
-    max_score = max(scores) if scores else 0.0
+    # Seleccionar top-K parches por heurística
+    top_k = min(12, len(candidates))
+    candidates.sort(key=lambda t: t[0], reverse=True)
+    selected = candidates[:top_k]
+
+    deep_scores = []
+    # Ejecutar análisis profundo sobre los parches seleccionados
+    for hscore, box, patch in selected:
+        try:
+            # analyze_patch maneja fallback remoto si el modelo local no está disponible
+            ds = analyze_patch(patch)
+        except Exception:
+            # si falla, intentar inferencia remota directa
+            try:
+                ds = remote_model_infer(patch) if HF_API_TOKEN else hscore
+            except Exception:
+                ds = hscore
+        deep_scores.append(ds)
+
+    # También intentar analizar la imagen completa si al menos un parche presentó alta sospecha
+    try_full = any(s >= 40 for s in deep_scores) or any(c[0] >= 40 for c in candidates)
+    if try_full:
+        try:
+            full = analyze_patch(img)
+            deep_scores.append(full)
+        except Exception:
+            pass
+
+    max_score = max(deep_scores) if deep_scores else 0.0
     return max_score
 
 def analyze_video_frames(video_path, max_frames=20):
