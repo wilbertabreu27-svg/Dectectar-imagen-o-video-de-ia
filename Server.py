@@ -2,19 +2,51 @@ import os
 import cv2
 import numpy as np
 from flask import Flask, request, render_template_string, jsonify
-import torch
-from PIL import Image
-from transformers import AutoModelForImageClassification, AutoFeatureExtractor
+from PIL import Image, ExifTags
+import threading
+import time
+
+# Reduce parallelism inside numeric libraries to lower memory use
+os.environ.setdefault('OMP_NUM_THREADS', '1')
+os.environ.setdefault('MKL_NUM_THREADS', '1')
+
+# Heavy ML deps (torch / transformers) are loaded lazily inside get_model()
 
 app = Flask(__name__)
 
 MODEL_NAME = "Organika/sdxl-detector"
-device = "cuda" if torch.cuda.is_available() else "cpu"
+# Globals populated on first use
+model = None
+feature_extractor = None
+_model_lock = threading.Lock()
 
-print(f"Cargando modelo forense en {device}...")
-feature_extractor = AutoFeatureExtractor.from_pretrained(MODEL_NAME)
-model = AutoModelForImageClassification.from_pretrained(MODEL_NAME).to(device)
-model.eval()
+
+def get_model():
+    """Carga el modelo y el extractor de forma perezosa y segura en multi-hilo.
+    Usa low_cpu_mem_usage si está disponible para reducir picos de memoria.
+    """
+    global model, feature_extractor
+    if model is not None and feature_extractor is not None:
+        return model, feature_extractor
+
+    with _model_lock:
+        if model is not None and feature_extractor is not None:
+            return model, feature_extractor
+
+        try:
+            import torch
+            from transformers import AutoModelForImageClassification, AutoFeatureExtractor
+        except Exception as e:
+            raise RuntimeError(f"No se han podido cargar dependencias ML: {e}")
+
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        # Intentar reducir el uso de memoria durante la deserialización
+        feature_extractor = AutoFeatureExtractor.from_pretrained(MODEL_NAME)
+        # low_cpu_mem_usage ayuda a evitar picos al cargar checkpoints grandes
+        model = AutoModelForImageClassification.from_pretrained(MODEL_NAME, low_cpu_mem_usage=True)
+        model.to(device)
+        model.eval()
+        return model, feature_extractor
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -53,39 +85,83 @@ HTML_TEMPLATE = """
 """
 
 def analyze_patch(patch_img):
-    inputs = feature_extractor(images=patch_img, return_tensors="pt").to(device)
+    # Cargar modelo/extractor perezosamente
+    model, feature_extractor = get_model()
+    try:
+        import torch
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    except Exception:
+        import warnings
+        warnings.warn("Torch no disponible; forzando CPU")
+        device = "cpu"
+
+    inputs = feature_extractor(images=patch_img, return_tensors="pt")
+    # BatchEncoding soporta .to, pero hacer fallback si no
+    try:
+        inputs = inputs.to(device)
+    except Exception:
+        for k, v in list(inputs.items()):
+            if hasattr(v, 'to'):
+                inputs[k] = v.to(device)
+
     with torch.no_grad():
         outputs = model(**inputs)
         probs = torch.nn.functional.softmax(outputs.logits, dim=-1)
-    # Índice 1 representa contenido sintético/modificado según los pesos del modelo
+
+    # Índice 1 representa contenido sintético/modificado según el modelo
     score = probs[0][1].item() * 100 if probs.shape[1] > 1 else probs[0][0].item() * 100
     return score
 
-def forensic_grid_analysis(image_path, patch_size=256, stride=128):
-    img = Image.open(image_path).convert("RGB")
+def forensic_grid_analysis(image_or_path, patch_size=256, stride=128):
+    """Analiza una imagen (ruta o PIL.Image) por parches y devuelve la máxima puntuación.
+    Esta función llama a analyze_patch que cargará el modelo si es necesario.
+    """
+    if isinstance(image_or_path, str):
+        img = Image.open(image_or_path).convert("RGB")
+    else:
+        img = image_or_path.convert("RGB")
+
     width, height = img.size
-    
     scores = []
+
     # Si la imagen es muy pequeña, se analiza completa
     if width < patch_size or height < patch_size:
-        return analyze_patch(img), 1
-        
+        return analyze_patch(img)
+
     # Estrategia de parches deslizantes para detectar objetos agregados o recortes locales
+    # Limitar el número máximo de parches para evitar sobrecarga en entornos con memoria limitada
+    max_patches = 64
+    patch_count = 0
     for y in range(0, height - patch_size + 1, stride):
         for x in range(0, width - patch_size + 1, stride):
             box = (x, y, x + patch_size, y + patch_size)
             patch = img.crop(box)
             score = analyze_patch(patch)
             scores.append(score)
-            
-    # Incluir análisis global
-    full_score = analyze_patch(img)
-    scores.append(full_score)
-    
-    max_score = max(scores) if scores else full_score
+            patch_count += 1
+            if patch_count >= max_patches:
+                break
+        if patch_count >= max_patches:
+            break
+
+    # Incluir análisis global (si queda presupuesto)
+    try:
+        full_score = analyze_patch(img)
+        scores.append(full_score)
+    except Exception:
+        pass
+
+    max_score = max(scores) if scores else 0.0
     return max_score
 
 def analyze_video_frames(video_path, max_frames=20):
+    # Prefiltro ligero: muestrear fotogramas y buscar anomalías simples
+    suspicious, details_score, sample_scores = prefilter_video(video_path, samples=min(6, max_frames))
+    if not suspicious:
+        # No hay indicios en el muestreo: devolver un score ligero basado en el prefiltro
+        avg = float(np.mean(sample_scores)) if sample_scores else 0.0
+        return avg, 0
+
     cap = cv2.VideoCapture(video_path)
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     if total_frames <= 0:
@@ -117,10 +193,13 @@ def analyze_video_frames(video_path, max_frames=20):
                 
         prev_gray = gray
         
-        # Análisis de IA por fotograma individual
+        # Análisis forense profundo solo cuando el prefiltro muestra sospecha
         cv_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         pil_img = Image.fromarray(cv_rgb)
-        score = forensic_grid_analysis(pil_img) if hasattr(pil_img, 'size') else 50.0
+        try:
+            score = forensic_grid_analysis(pil_img)
+        except Exception:
+            score = 50.0
         frame_scores.append(score)
         
         frame_idx += step
@@ -129,6 +208,92 @@ def analyze_video_frames(video_path, max_frames=20):
     cap.release()
     max_v_score = max(frame_scores) if frame_scores else 0.0
     return max_v_score, temporal_anomalies
+
+
+def prefilter_image(image_input):
+    """Heurísticos ligeros para detectar manipulación en una imagen o PIL.Image.
+    Devuelve (suspicious: bool, score: float, details: str).
+    """
+    # Acepta ruta o PIL.Image
+    if isinstance(image_input, str):
+        try:
+            img = Image.open(image_input)
+            path = image_input
+        except Exception:
+            return True, 75.0, "No se pudo abrir imagen"
+    else:
+        img = image_input
+        path = None
+
+    try:
+        gray = np.array(img.convert('L'))
+    except Exception:
+        return True, 80.0, "Formato de imagen no válido"
+
+    # Blur detection (varianza del Laplaciano)
+    lap = cv2.Laplacian(gray, cv2.CV_64F)
+    lap_var = float(lap.var())
+
+    # Edge density
+    edges = cv2.Canny(gray, 100, 200)
+    edge_density = float(np.count_nonzero(edges)) / (gray.shape[0] * gray.shape[1])
+
+    # Tamaño de archivo relativo -> posible recompresión
+    file_size_kb = None
+    if path and os.path.exists(path):
+        try:
+            file_size_kb = os.path.getsize(path) / 1024.0
+        except Exception:
+            file_size_kb = None
+
+    # Regla heurística combinada
+    score = 0.0
+    # baja varianza laplaciana -> borrosa -> manipulación posible
+    if lap_var < 50:
+        score += 30
+    # densidad de bordes muy baja o muy alta puede indicar recortes/pegados
+    if edge_density < 0.01 or edge_density > 0.18:
+        score += 30
+    # muy pequeño tamaño en KB para resolución -> recompress
+    if file_size_kb is not None:
+        px = gray.shape[0] * gray.shape[1]
+        ratio = file_size_kb / max(1, px/1000)
+        if ratio < 0.5:
+            score += 20
+
+    suspicious = score >= 30
+    details = f"lap_var={lap_var:.1f}, edge_density={edge_density:.3f}, score={score:.1f}"
+    return suspicious, float(score), details
+
+
+def prefilter_video(video_path, samples=6):
+    """Muestrea frames periódicos y aplica prefilter_image. Devuelve (suspicious, avg_score, scores_list).
+    """
+    cap = cv2.VideoCapture(video_path)
+    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    if total <= 0:
+        total = 1
+    step = max(1, total // samples)
+    scores = []
+    suspicious_count = 0
+    idx = 0
+    for i in range(samples):
+        cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+        ret, frame = cap.read()
+        if not ret:
+            break
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        pil = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+        sus, sc, det = prefilter_image(pil)
+        scores.append(sc)
+        if sus:
+            suspicious_count += 1
+        idx += step
+    cap.release()
+    avg = float(np.mean(scores)) if scores else 0.0
+    # Si más de la mitad de muestras son sospechosas, marcar el video
+    suspicious = suspicious_count >= max(1, samples // 2)
+    return suspicious, avg, scores
 
 @app.route('/', methods=['GET', 'POST'])
 def index():
@@ -145,7 +310,13 @@ def index():
                 max_score, anomalies = analyze_video_frames(filepath)
                 file_type = "VIDEO (CCTV)"
             else:
-                max_score = forensic_grid_analysis(filepath)
+                # Prefiltro ligero en imagenes
+                suspicious, score, details = prefilter_image(filepath)
+                if suspicious:
+                    max_score = forensic_grid_analysis(filepath)
+                else:
+                    # No sospecha en prefiltro: devolver puntuación ligera
+                    max_score = score
                 anomalies = 0
                 file_type = "IMAGEN"
                 
