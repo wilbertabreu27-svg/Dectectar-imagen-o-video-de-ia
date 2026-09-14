@@ -45,8 +45,16 @@ def get_model():
         device = "cuda" if torch.cuda.is_available() else "cpu"
         # Intentar reducir el uso de memoria durante la deserialización
         feature_extractor = AutoFeatureExtractor.from_pretrained(MODEL_NAME)
-        # low_cpu_mem_usage ayuda a evitar picos al cargar checkpoints grandes
-        model = AutoModelForImageClassification.from_pretrained(MODEL_NAME, low_cpu_mem_usage=True)
+        # low_cpu_mem_usage requiere accelerate; si falla, reintentar sin ese argumento
+        try:
+            model = AutoModelForImageClassification.from_pretrained(MODEL_NAME, low_cpu_mem_usage=True)
+        except Exception as e:
+            print("Advertencia: no se pudo usar low_cpu_mem_usage (Accelerate no instalado?) -> fallback sin low_cpu_mem_usage:", str(e))
+            try:
+                model = AutoModelForImageClassification.from_pretrained(MODEL_NAME)
+            except Exception as e2:
+                raise RuntimeError(f"No se pudo cargar el modelo: {e2}")
+
         model.to(device)
         model.eval()
         return model, feature_extractor
