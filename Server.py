@@ -5,6 +5,7 @@ from flask import Flask, request, render_template_string, jsonify
 from PIL import Image, ExifTags
 import threading
 import time
+import traceback
 
 # Reduce parallelism inside numeric libraries to lower memory use
 os.environ.setdefault('OMP_NUM_THREADS', '1')
@@ -19,6 +20,7 @@ MODEL_NAME = "Organika/sdxl-detector"
 model = None
 feature_extractor = None
 _model_lock = threading.Lock()
+DEBUG_SHOW_STACK = os.environ.get('DEBUG_SHOW_STACK', 'false').lower() == 'true'
 PREFILTER_THRESHOLD = 20.0  # reducir umbral para más sensibilidad
 
 
@@ -336,13 +338,17 @@ def prefilter_video(video_path, samples=6):
 def index():
     result = None
     if request.method == 'POST':
-        file = request.files['file']
+        file = request.files.get('file')
         force_deep = True if request.form.get('force_deep') == 'on' else False
-        if file:
+        filepath = None
+        try:
+            if not file:
+                raise ValueError('No se ha recibido el archivo')
+
             filepath = os.path.join("uploads", file.filename)
             os.makedirs("uploads", exist_ok=True)
             file.save(filepath)
-            
+
             ext = file.filename.split('.')[-1].lower()
             if ext in ['mp4', 'avi', 'mov', 'mkv']:
                 max_score, anomalies = analyze_video_frames(filepath)
@@ -358,9 +364,9 @@ def index():
                     max_score = score
                 anomalies = 0
                 file_type = "IMAGEN"
-                
+
             verdict = "ALTAMENTE SOSPECHOSO / ALTERADO" if max_score > 65 or anomalies > 0 else "PROBABLEMENTE AUTÉNTICO"
-            
+
             result = {
                 "verdict": verdict,
                 "type": file_type,
@@ -368,7 +374,28 @@ def index():
                 "temporal_anomalies": anomalies,
                 "details": f"Análisis de parches y coherencia aplicado. Puntuación de riesgo de manipulación: {round(max_score, 2)}%"
             }
-            os.remove(filepath)
+        except Exception as e:
+            # Log server-side
+            tb = traceback.format_exc()
+            print("Error procesando archivo:", str(e))
+            print(tb)
+            # Prepare friendly result
+            details_msg = str(e)
+            if DEBUG_SHOW_STACK:
+                details_msg = f"{details_msg}\n\n{tb}"
+            result = {
+                "verdict": "ERROR INTERNO DEL SERVIDOR",
+                "type": "N/A",
+                "max_score": 0.0,
+                "temporal_anomalies": 0,
+                "details": details_msg
+            }
+        finally:
+            try:
+                if filepath and os.path.exists(filepath):
+                    os.remove(filepath)
+            except Exception:
+                pass
             
     return render_template_string(HTML_TEMPLATE, result=result)
 
